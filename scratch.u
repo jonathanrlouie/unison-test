@@ -1,0 +1,253 @@
+unique ability TryGet where
+  tryGet : Optional a -> a
+
+tryGetHandler : Request TryGet a -> Optional a
+tryGetHandler r = match r with
+  { TryGet.tryGet opt -> k } ->
+    match opt with
+      Some value -> 
+        handle (k value) with tryGetHandler
+      None -> None
+  { a } -> Some a
+
+toOptional : '{g, TryGet} v ->{g} Optional v
+toOptional thunk =
+  handle !thunk with tryGetHandler
+
+unique type Winner = PlayerX | PlayerO | Draw
+
+unique type Piece = X | O
+
+showPiece : Piece -> Text
+showPiece piece = match piece with
+  X -> "X"
+  O -> "O"
+
+eqPiece : Piece -> Piece -> Boolean
+eqPiece piece1 piece2 = match piece1 with
+  X -> match piece2 with
+    X -> true
+    O -> false
+  O -> match piece2 with
+    X -> true
+    O -> false
+
+unique type Square = Empty | Filled Piece
+
+eqSquare : Square -> Square -> Boolean
+eqSquare square1 square2 = match square1 with
+  Empty -> match square2 with
+    Empty -> true
+    Filled _ -> false
+  Filled p1 -> match square2 with
+    Empty -> false
+    Filled p2 -> eqPiece p1 p2
+
+showSquare : Square -> Text
+showSquare square = match square with 
+  Empty -> "_"
+  Filled piece -> showPiece piece
+
+initBoard : [[Square]]
+initBoard = [
+  [Empty, Empty, Empty],
+  [Empty, Empty, Empty],
+  [Empty, Empty, Empty]
+]
+
+index : Nat -> [a] -> Optional a
+index idx board = head (List.drop idx board)
+
+replaceAt : Nat -> a -> [a] ->{Throw Text} [a]
+replaceAt idx elem xs = 
+  (a, b) = splitAt idx xs
+  match tail b with
+    None -> throw "Cannot get tail of empty list"
+    Some ys -> a ++ (elem +: ys)
+
+unique type Position = {x : Nat, y : Nat}
+
+unique type Input = {pos : Position, sqr : Square}
+
+updateBoard : Input -> [[Square]] ->{Throw Text} [[Square]]
+updateBoard input board = 
+  pos = Input.pos input
+  square = Input.sqr input
+  x = Position.x pos
+  y = Position.y pos
+  match index y board with
+    None -> throw "Input y out of range"
+    Some row ->
+      row' = replaceAt x square row
+      replaceAt y row' board
+
+renderBoard : [[Square]] -> {IO, Exception} ()
+renderBoard board =
+  List.map (row -> printLine (List.foldLeft (++) "" (List.map showSquare row))) board
+  ()
+
+playGame : Input ->{Store [[Square]], IO, Exception, Throw Text} ()
+playGame input =
+  board = Store.get
+  board' = updateBoard input board
+  Store.put board'
+  renderBoard board'
+  ()
+
+unique type LineType = Row | Column
+
+showLineType : LineType -> Text
+showLineType lineType =
+  match lineType with
+    Row -> "row"
+    Column -> "column"
+
+readRowOrColumn : LineType ->{IO, Exception} Nat
+readRowOrColumn lineType =
+  printLine ("Input a " ++ (showLineType lineType) ++ " number (0-2). Non-integers will be interpreted as 0.")
+  input = !console.getLine
+  line = Nat.fromText input
+  match line with
+    Some line' -> line'
+    None ->
+      printLine "Not a valid number. Try again."
+      readRowOrColumn lineType
+
+getSquare : Nat -> Nat -> [[Square]] -> Optional Square
+getSquare col row board =
+  match index row board with
+    Some row' -> match index col row' with
+      Some square -> Some square
+      None -> None
+    None -> None
+
+getInput : Nat -> Nat -> Piece -> [[Square]] -> Optional Input
+getInput col row piece board =
+  match getSquare col row board with
+    Some Empty -> Some (Input (Position col row) (Filled piece))
+    otherwise -> None
+
+playerTurn : Piece ->{Throw Text, Store [[Square]], IO, Exception} ()
+playerTurn piece =
+  printLine ("Player " ++ showPiece piece ++ "'s turn")
+  col = readRowOrColumn Column
+  row = readRowOrColumn Row
+  board = Store.get
+  match getInput col row piece board with
+    Some input -> playGame input
+    None ->
+      printLine "Invalid position. Try again."
+      playerTurn piece
+
+checkLine : Square -> Square -> Square -> Optional Winner
+checkLine square0 square1 square2 =
+  match square0 with
+    Filled X -> match square1 with
+      Filled X -> match square2 with
+        Filled X -> Some PlayerX
+        Filled O -> None
+        Empty -> None
+      Filled O -> None
+      Empty -> None
+    Filled O -> match square1 with
+      Filled O -> match square2 with
+        Filled O -> Some PlayerO
+        Filled X -> None
+        Empty -> None
+      Filled X -> None
+      Empty -> None
+    Empty -> None
+
+checkRow : Nat -> [[Square]] ->{TryGet} Optional Winner
+checkRow rowIdx board =
+  row = TryGet.tryGet (index rowIdx board)
+  square0 = TryGet.tryGet (index 0 row)
+  square1 = TryGet.tryGet (index 1 row)
+  square2 = TryGet.tryGet (index 2 row)
+  checkLine square0 square1 square2
+
+checkColumn : Nat -> [[Square]] ->{TryGet} Optional Winner
+checkColumn colIdx board =
+  row0 = TryGet.tryGet (index 0 board)
+  row1 = TryGet.tryGet (index 1 board)
+  row2 = TryGet.tryGet (index 2 board)
+  square0 = TryGet.tryGet (index colIdx row0)
+  square1 = TryGet.tryGet (index colIdx row1)
+  square2 = TryGet.tryGet (index colIdx row2)
+  checkLine square0 square1 square2
+  
+checkDiagonalTLBR : [[Square]] ->{TryGet} Optional Winner
+checkDiagonalTLBR board =
+  row0 = TryGet.tryGet (index 0 board)
+  row1 = TryGet.tryGet (index 1 board)
+  row2 = TryGet.tryGet (index 2 board)
+  square0 = TryGet.tryGet (index 0 row0)
+  square1 = TryGet.tryGet (index 1 row1)
+  square2 = TryGet.tryGet (index 2 row2)
+  checkLine square0 square1 square2
+
+checkDiagonalTRBL : [[Square]] ->{TryGet} Optional Winner
+checkDiagonalTRBL board =
+  row0 = TryGet.tryGet (index 0 board)
+  row1 = TryGet.tryGet (index 1 board)
+  row2 = TryGet.tryGet (index 2 board)
+  square0 = TryGet.tryGet (index 2 row0)
+  square1 = TryGet.tryGet (index 1 row1)
+  square2 = TryGet.tryGet (index 0 row2)
+  checkLine square0 square1 square2
+
+checkDraw : [[Square]] -> Optional Winner
+checkDraw board =
+  if List.foldLeft (acc -> row -> (List.contains Empty row) || acc) false board
+    then None
+    else Some Draw
+
+getWinner : Optional Winner ->{Throw Winner} ()
+getWinner optWinner = match optWinner with
+  Some winner -> throw winner
+  None -> ()
+
+calculateWinner : [[Square]] ->{TryGet} Optional Winner
+calculateWinner board =
+  result _ = 
+    getWinner (checkColumn 0 board)
+    getWinner (checkColumn 1 board)
+    getWinner (checkColumn 2 board)
+    getWinner (checkRow 0 board)
+    getWinner (checkRow 1 board)
+    getWinner (checkRow 2 board)
+    getWinner (checkDiagonalTLBR board)
+    getWinner (checkDiagonalTRBL board)
+    getWinner (checkDraw board)
+  match toEither result with
+    Left winner -> Some winner
+    Right _ -> None
+
+printWinner : Winner ->{IO, Exception} ()
+printWinner winner =
+  match winner with
+    PlayerX -> printLine "X wins!"
+    PlayerO -> printLine "O wins!"
+    Draw -> printLine "It's a draw!"
+
+gameLoop : '{Throw Text, IO, Exception, TryGet, Store [[Square]]} ()
+gameLoop _ = 
+  playerTurn X
+  board = Store.get
+  match calculateWinner board with
+    Some winner -> printWinner winner
+    None ->
+      playerTurn O
+      board' = Store.get
+      match calculateWinner board' with
+        Some winner -> printWinner winner
+        None -> gameLoop ()
+
+main : '{IO, Exception} ()
+main _ = 
+  match toEither '(toOptional '(Store.withInitialValue initBoard gameLoop)) with
+    Left err -> printLine err
+    Right x -> match x with
+      None -> printLine "Program invariant violated"
+      Some _ -> ()
+      
